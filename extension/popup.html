@@ -119,6 +119,12 @@
     button.fmt:hover { background: var(--accent-soft); border-color: var(--accent); }
     button.fmt:active { transform: translateY(1px); }
     button.fmt[disabled] { opacity: 0.5; cursor: default; }
+    button.fmt.downloaded {
+      border-color: var(--ok);
+      color: var(--ok);
+      background: rgba(74,222,128,0.08);
+    }
+    button.fmt.downloaded::before { content: "✓ "; }
     .history {
       max-height: 280px;
       overflow-y: auto;

@@ -64,8 +64,26 @@ async function init() {
   });
 
   await render();
+  await markDownloaded();
   browser.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes.history) render();
+    if (area === "local" && changes.history) {
+      render();
+      markDownloaded();
+    }
+  });
+}
+
+async function markDownloaded() {
+  const obj = await browser.storage.local.get("history");
+  const items = obj.history || [];
+  const formats = new Set(
+    items
+      .filter((it) => it.status === "done" && it.url === currentUrl)
+      .map((it) => it.format)
+  );
+  buttons.forEach((b) => {
+    b.classList.toggle("downloaded", formats.has(b.dataset.format));
+    b.title = formats.has(b.dataset.format) ? "already downloaded — click to re-download" : "";
   });
 }
 
