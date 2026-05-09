@@ -1,0 +1,31 @@
+{
+  "manifest_version": 2,
+  "name": "yt-dlp launcher",
+  "version": "0.2.0",
+  "description": "Download the current tab's media with yt-dlp.",
+  "permissions": ["nativeMessaging", "activeTab", "storage"],
+  "icons": {
+    "48": "icon.svg",
+    "96": "icon.svg",
+    "128": "icon.svg"
+  },
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "page_action": {
+    "default_title": "yt-dlp",
+    "default_popup": "popup.html",
+    "default_icon": "icon-action.svg",
+    "show_matches": [
+      "*://*.youtube.com/*",
+      "*://youtu.be/*"
+    ]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "ytdlp@matthewmorrone",
+      "strict_min_version": "109.0"
+    }
+  }
+}

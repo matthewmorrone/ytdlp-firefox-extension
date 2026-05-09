@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Transparent background; only the arrow + tray render as the masked silhouette -->
+  <path d="M64 22 L64 78 M36 58 L64 86 L92 58"
+        fill="none" stroke="#000" stroke-width="14"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="26" y="98" width="76" height="12" rx="4" fill="#000"/>
+</svg>

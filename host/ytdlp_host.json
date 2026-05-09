@@ -1,0 +1,7 @@
+{
+  "name": "ytdlp_host",
+  "description": "yt-dlp launcher",
+  "path": "/Users/matthewmorrone/Desktop/ytdlp-extension/host/ytdlp_host.py",
+  "type": "stdio",
+  "allowed_extensions": ["ytdlp@matthewmorrone"]
+}
