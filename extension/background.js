@@ -113,3 +113,36 @@ browser.runtime.onMessage.addListener(async (msg) => {
     return true;
   }
 });
+
+// MV3 has no page_action.show_matches — gate the toolbar action ourselves.
+const SUPPORTED_HOSTS = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "youtu.be",
+]);
+function isSupportedUrl(url) {
+  if (!url) return false;
+  try { return SUPPORTED_HOSTS.has(new URL(url).hostname); } catch { return false; }
+}
+async function updateActionForTab(tabId, url) {
+  try {
+    if (isSupportedUrl(url)) {
+      await browser.action.enable(tabId);
+      await browser.action.setTitle({ tabId, title: "yt-dlp: download this video" });
+    } else {
+      await browser.action.disable(tabId);
+      await browser.action.setTitle({ tabId, title: "yt-dlp (only on YouTube)" });
+    }
+  } catch {}
+}
+browser.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (change.url || change.status === "complete") updateActionForTab(tabId, tab.url);
+});
+browser.tabs.onActivated.addListener(async ({ tabId }) => {
+  try {
+    const t = await browser.tabs.get(tabId);
+    updateActionForTab(tabId, t.url);
+  } catch {}
+});
+browser.tabs.query({}).then((tabs) => tabs.forEach((t) => updateActionForTab(t.id, t.url)));
