@@ -42,6 +42,27 @@ function parseLine(line) {
 
 async function startDownload(req) {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  // A captured HLS stream is referenced by streamId; resolve it to the stored
+  // playlist text here so the popup never has to shuttle ~100 KB of manifest.
+  let playlist = null;
+  if (req.streamId != null) {
+    playlist = HLSCapture.getText(req.tabId, req.streamId);
+    if (!playlist) {
+      await upsert(id, {
+        url: req.url || "",
+        title: req.title || "",
+        format: req.format,
+        filename: req.filename,
+        status: "failed",
+        error: "stream no longer captured — reload the page and play it again",
+        startedAt: Date.now(),
+        finishedAt: Date.now(),
+      });
+      return id;
+    }
+  }
+
   await upsert(id, {
     url: req.url,
     title: req.title || "",
@@ -95,6 +116,7 @@ async function startDownload(req) {
 
   port.postMessage({
     url: req.url,
+    playlist, // present for captured HLS streams; host prefers it over url
     format: req.format,
     filename: req.filename,
     embedThumbnail: req.embedThumbnail,
@@ -106,6 +128,7 @@ async function startDownload(req) {
 
 browser.runtime.onMessage.addListener(async (msg) => {
   if (msg?.action === "start") return startDownload(msg.req);
+  if (msg?.action === "getStreams") return HLSCapture.list(msg.tabId);
   if (msg?.action === "clearHistory") return saveHistory([]);
   if (msg?.action === "removeItem") {
     const items = (await getHistory()).filter((x) => x.id !== msg.id);

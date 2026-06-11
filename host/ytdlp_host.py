@@ -5,6 +5,7 @@ import re
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import traceback
 from pathlib import Path
@@ -19,6 +20,33 @@ YTDLP = "/opt/homebrew/bin/yt-dlp"
 DOWNLOAD_DIR = str(Path.home() / "Downloads")
 LOG_FILE = "/tmp/ytdlp_host.log"
 FILENAME_BAD = re.compile(r'[/\x00-\x1f"\'`$]')
+MAX_PLAYLIST_BYTES = 5 * 1024 * 1024
+
+
+def sanitize_playlist(text):
+    """Reject anything that isn't a plain HLS playlist of http(s) URLs.
+
+    We run yt-dlp with --enable-file-urls so it can read our local temp
+    playlist; that flag also means a malicious manifest could point at
+    file:// "segments" to read local files. So every segment line and every
+    tag URI ("URI=...") must be http(s).
+    """
+    if "#EXTM3U" not in text:
+        raise ValueError("not an m3u8 playlist")
+    if len(text.encode("utf-8")) > MAX_PLAYLIST_BYTES:
+        raise ValueError("playlist too large")
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            for uri in re.findall(r'URI="([^"]+)"', line):
+                if not (uri.startswith("http://") or uri.startswith("https://")):
+                    raise ValueError("playlist tag URI must be http(s)")
+            continue
+        if not (line.startswith("http://") or line.startswith("https://")):
+            raise ValueError("playlist segment must be http(s)")
+    return text
 
 
 def dlog(msg):
@@ -46,18 +74,45 @@ def send(obj):
 
 
 def build_args(req):
+    """Return (args, tmpfile). tmpfile is a path to clean up, or None."""
     url = req.get("url", "")
     fmt = req.get("format", "mp4")
     filename = (req.get("filename") or "").strip()
+    playlist = req.get("playlist")
     embed_thumb = req.get("embedThumbnail", True)
     embed_meta = req.get("embedMetadata", True)
-
-    if not url or not (url.startswith("http://") or url.startswith("https://")):
-        raise ValueError(f"refusing to run on non-http url: {url!r}")
 
     if filename:
         if FILENAME_BAD.search(filename) or filename in (".", "..") or len(filename) > 200:
             raise ValueError(f"invalid filename: {filename!r}")
+
+    # Captured HLS stream: write the manifest text to a temp file and let
+    # yt-dlp pull the (token-authed) segments. No browser cookies needed.
+    if playlist:
+        sanitize_playlist(playlist)
+        fd, tmpfile = tempfile.mkstemp(suffix=".m3u8")
+        with os.fdopen(fd, "w") as f:
+            f.write(playlist)
+
+        args = [YTDLP, "--newline", "-P", DOWNLOAD_DIR, "--enable-file-urls"]
+        if filename:
+            args += ["-o", f"{filename}.%(ext)s"]
+        if fmt == "mp4":
+            args += ["--merge-output-format", "mp4"]
+        elif fmt == "mp3":
+            args += ["-x", "--audio-format", "mp3"]
+        else:
+            os.unlink(tmpfile)
+            raise ValueError(f"unknown format: {fmt!r}")
+        if embed_meta:
+            args += ["--embed-metadata"]
+        # No --embed-thumbnail: a local HLS playlist has no thumbnail source.
+        args.append(f"file://{tmpfile}")
+        return args, tmpfile
+
+    # Direct-URL path (e.g. YouTube and other yt-dlp-supported sites).
+    if not url or not (url.startswith("http://") or url.startswith("https://")):
+        raise ValueError(f"refusing to run on non-http url: {url!r}")
 
     args = [YTDLP, "--newline", "-P", DOWNLOAD_DIR, "--cookies-from-browser", "firefox"]
     if filename:
@@ -79,7 +134,7 @@ def build_args(req):
         args += ["--embed-metadata"]
 
     args.append(url)
-    return args
+    return args, None
 
 
 def stream_proc(proc):
@@ -93,14 +148,17 @@ def stream_proc(proc):
 
 def main():
     dlog(f"--- start pid={os.getpid()}")
+    tmpfile = None
     try:
         req = read_message()
         if req is None:
             return
-        dlog(f"req: {req}")
+        # Don't dump the whole manifest into the log.
+        safe = {k: (f"<{len(v)} bytes>" if k == "playlist" and isinstance(v, str) else v) for k, v in req.items()}
+        dlog(f"req: {safe}")
 
         try:
-            args = build_args(req)
+            args, tmpfile = build_args(req)
         except ValueError as e:
             send({"type": "error", "message": str(e)})
             send({"type": "done", "code": 2})
@@ -130,6 +188,12 @@ def main():
             send({"type": "done", "code": 1})
         except Exception:
             pass
+    finally:
+        if tmpfile:
+            try:
+                os.unlink(tmpfile)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

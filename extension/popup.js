@@ -35,13 +35,85 @@ function escape(s) {
 let currentUrl = "";
 let currentTitle = "";
 let currentThumb = "";
+let currentTabId = null;
 let buttons;
+
+// Captured HLS streams for the active tab.
+let streams = [];
+let selectedStreamId = null;
+
+const streamById = (id) => streams.find((s) => s.id === id);
+
+function fmtDuration(sec) {
+  if (!sec) return "";
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function streamLabel(s) {
+  const parts = [s.resolution ? s.resolution.replace("x", " × ") : "HLS stream"];
+  if (s.durationSec) parts.push(fmtDuration(s.durationSec));
+  parts.push(`${s.segmentCount} seg`);
+  return parts.join(" · ");
+}
+
+// Highest resolution wins, then most segments (the full-length playlist).
+function pickBest(list) {
+  return [...list].sort((a, b) => {
+    const ha = a.resolution ? parseInt(a.resolution.split("x")[1] || "0", 10) : 0;
+    const hb = b.resolution ? parseInt(b.resolution.split("x")[1] || "0", 10) : 0;
+    if (hb !== ha) return hb - ha;
+    return (b.segmentCount || 0) - (a.segmentCount || 0);
+  })[0];
+}
+
+async function loadStreams() {
+  try {
+    streams = (await browser.runtime.sendMessage({ action: "getStreams", tabId: currentTabId })) || [];
+  } catch {
+    streams = [];
+  }
+  if (streams.length) {
+    const best = pickBest(streams);
+    selectedStreamId = best ? best.id : null;
+  }
+  renderStreams();
+}
+
+function renderStreams() {
+  const wrap = $("streams");
+  if (!streams.length) {
+    wrap.classList.add("hidden");
+    wrap.innerHTML = "";
+    return;
+  }
+  wrap.classList.remove("hidden");
+  wrap.innerHTML =
+    `<div class="streams-head">detected streams</div>` +
+    streams
+      .map(
+        (s) => `
+      <div class="stream${s.id === selectedStreamId ? " sel" : ""}" data-id="${escape(s.id)}">
+        <span class="stream-dot"></span>
+        <span class="stream-label">${escape(streamLabel(s))}</span>
+      </div>`
+      )
+      .join("");
+  wrap.querySelectorAll(".stream").forEach((el) => {
+    el.addEventListener("click", () => {
+      selectedStreamId = el.dataset.id;
+      renderStreams();
+    });
+  });
+}
 
 async function init() {
   buttons = document.querySelectorAll("button.fmt");
 
   const tabs = await browser.tabs.query({ active: true, currentWindow: true });
   const tab = tabs[0] || {};
+  currentTabId = tab.id;
   currentUrl = canonicalize(tab.url || "");
 
   currentTitle = (tab.title || "").replace(/\s*-\s*YouTube\s*$/i, "").trim();
@@ -51,6 +123,15 @@ async function init() {
   if (id) {
     currentThumb = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
     $("thumb").src = currentThumb;
+    // If the preview fails to load, fall back to the placeholder state.
+    $("thumb").addEventListener("error", () => {
+      currentThumb = "";
+      $("thumbWrap").classList.add("no-preview");
+    });
+  } else {
+    // No preview available off-YouTube; show a placeholder. yt-dlp can still
+    // embed the source's own thumbnail via --embed-thumbnail.
+    $("thumbWrap").classList.add("no-preview");
   }
 
   $("thumbX").addEventListener("click", () => {
@@ -63,6 +144,7 @@ async function init() {
     await browser.runtime.sendMessage({ action: "clearHistory" });
   });
 
+  await loadStreams();
   await render();
   await markDownloaded();
   browser.storage.onChanged.addListener((changes, area) => {
@@ -88,16 +170,24 @@ async function markDownloaded() {
 }
 
 async function start(format) {
-  if (!currentUrl) return;
+  // Prefer a captured HLS stream when one is selected; otherwise fall back to
+  // handing the page URL to yt-dlp (YouTube and other supported sites).
+  const stream = selectedStreamId != null ? streamById(selectedStreamId) : null;
+  if (!stream && !currentUrl) return;
+
   const req = {
-    url: currentUrl,
+    url: stream ? stream.url : currentUrl,
     title: currentTitle,
-    thumbnail: currentThumb,
+    thumbnail: stream ? "" : currentThumb,
     format,
     filename: $("filename").value.trim(),
     embedThumbnail: !$("thumbWrap").classList.contains("disabled"),
     embedMetadata: $("metadata").checked,
   };
+  if (stream) {
+    req.streamId = stream.id;
+    req.tabId = currentTabId;
+  }
   await browser.runtime.sendMessage({ action: "start", req });
 }
 
