@@ -140,6 +140,7 @@ def build_args(req):
 def stream_proc(proc):
     for line in proc.stdout:
         line = line.rstrip("\n")
+        dlog("yt: " + line)
         # message size guard
         if len(line) > 8000:
             line = line[:8000] + " …(truncated)"
@@ -164,6 +165,7 @@ def main():
             send({"type": "done", "code": 2})
             return
 
+        dlog("args: " + " ".join(args))
         send({"type": "log", "line": "$ " + " ".join(args)})
 
         proc = subprocess.Popen(
