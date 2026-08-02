@@ -2,3 +2,7 @@
 *.log
 __pycache__/
 *.pyc
+extension/node_modules/
+extension/web-ext-artifacts/
+extension/.amo-upload-uuid
+extension/package-lock.json

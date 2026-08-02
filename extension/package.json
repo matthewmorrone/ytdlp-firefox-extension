@@ -1,0 +1,17 @@
+{
+  "name": "ytdlp-launcher",
+  "private": true,
+  "version": "0.4.0",
+  "description": "Firefox extension packaging/signing helpers for the yt-dlp launcher.",
+  "scripts": {
+    "lint": "web-ext lint",
+    "build": "web-ext build --overwrite-dest",
+    "sign": "web-ext sign --channel=unlisted --api-key=$AMO_API_KEY --api-secret=$AMO_API_SECRET"
+  },
+  "webExt": {
+    "ignoreFiles": ["package.json", "package-lock.json", "node_modules"]
+  },
+  "devDependencies": {
+    "web-ext": "^8"
+  }
+}
