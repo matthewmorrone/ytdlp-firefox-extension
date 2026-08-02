@@ -26,6 +26,51 @@ async function upsert(id, patch) {
   await saveHistory(items);
 }
 
+// yt-dlp launched by Firefox can't read Firefox's profile dir (macOS sandbox).
+// We have first-class cookie access via the WebExtension API — gather the
+// cookies ourselves and hand them to yt-dlp as a Netscape cookies.txt blob.
+function netscapeCookies(cookies) {
+  const lines = ["# Netscape HTTP Cookie File"];
+  for (const c of cookies) {
+    const domain = (c.httpOnly ? "#HttpOnly_" : "") + c.domain;
+    const includeSubdomains = c.hostOnly ? "FALSE" : "TRUE";
+    const secure = c.secure ? "TRUE" : "FALSE";
+    const expiry = c.expirationDate ? Math.floor(c.expirationDate) : 0;
+    lines.push([domain, includeSubdomains, c.path, secure, expiry, c.name, c.value].join("\t"));
+  }
+  return lines.join("\n") + "\n";
+}
+
+// Extra origins to pull cookies from for known sites whose auth lives elsewhere
+// (e.g. YouTube → accounts.google.com). Returns [] for everything else.
+function extraCookieUrls(url) {
+  try {
+    const host = new URL(url).hostname;
+    if (/(^|\.)youtube\.com$/.test(host) || /(^|\.)youtu\.be$/.test(host)) {
+      return ["https://accounts.google.com/", "https://www.google.com/"];
+    }
+  } catch {}
+  return [];
+}
+
+async function gatherCookies(url) {
+  if (!url) return "";
+  const urls = [url, ...extraCookieUrls(url)];
+  const seen = new Set();
+  const all = [];
+  for (const u of urls) {
+    let list = [];
+    try { list = await browser.cookies.getAll({ url: u }); } catch {}
+    for (const c of list) {
+      const key = `${c.domain}\t${c.path}\t${c.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      all.push(c);
+    }
+  }
+  return all.length ? netscapeCookies(all) : "";
+}
+
 function parseLine(line) {
   let m;
   if ((m = PROGRESS_RE.exec(line))) {
@@ -114,9 +159,12 @@ async function startDownload(req) {
     }
   });
 
+  const cookies = await gatherCookies(req.url);
+
   port.postMessage({
     url: req.url,
     playlist, // present for captured HLS streams; host prefers it over url
+    cookies,  // Netscape cookies.txt text; host writes a temp file and passes --cookies
     format: req.format,
     filename: req.filename,
     embedThumbnail: req.embedThumbnail,

@@ -6,6 +6,7 @@
   "permissions": [
     "nativeMessaging",
     "activeTab",
+    "cookies",
     "storage",
     "webRequest",
     "webRequestBlocking",

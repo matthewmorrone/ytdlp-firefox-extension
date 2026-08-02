@@ -73,18 +73,29 @@ def send(obj):
     sys.stdout.buffer.flush()
 
 
+def write_cookies_file(text):
+    """Write Netscape cookies.txt text to a 0600 temp file and return its path."""
+    fd, path = tempfile.mkstemp(suffix=".txt", prefix="ytdlp_cookies_")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    return path
+
+
 def build_args(req):
-    """Return (args, tmpfile). tmpfile is a path to clean up, or None."""
+    """Return (args, cleanup_paths). cleanup_paths is a list of files to unlink."""
     url = req.get("url", "")
     fmt = req.get("format", "mp4")
     filename = (req.get("filename") or "").strip()
     playlist = req.get("playlist")
+    cookies = req.get("cookies")
     embed_thumb = req.get("embedThumbnail", True)
     embed_meta = req.get("embedMetadata", True)
 
     if filename:
         if FILENAME_BAD.search(filename) or filename in (".", "..") or len(filename) > 200:
             raise ValueError(f"invalid filename: {filename!r}")
+
+    cleanup = []
 
     # Captured HLS stream: write the manifest text to a temp file and let
     # yt-dlp pull the (token-authed) segments. No browser cookies needed.
@@ -93,6 +104,7 @@ def build_args(req):
         fd, tmpfile = tempfile.mkstemp(suffix=".m3u8")
         with os.fdopen(fd, "w") as f:
             f.write(playlist)
+        cleanup.append(tmpfile)
 
         args = [YTDLP, "--newline", "-P", DOWNLOAD_DIR, "--enable-file-urls"]
         if filename:
@@ -102,19 +114,28 @@ def build_args(req):
         elif fmt == "mp3":
             args += ["-x", "--audio-format", "mp3"]
         else:
-            os.unlink(tmpfile)
             raise ValueError(f"unknown format: {fmt!r}")
         if embed_meta:
             args += ["--embed-metadata"]
         # No --embed-thumbnail: a local HLS playlist has no thumbnail source.
         args.append(f"file://{tmpfile}")
-        return args, tmpfile
+        return args, cleanup
 
     # Direct-URL path (e.g. YouTube and other yt-dlp-supported sites).
     if not url or not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError(f"refusing to run on non-http url: {url!r}")
 
-    args = [YTDLP, "--newline", "-P", DOWNLOAD_DIR, "--cookies-from-browser", "firefox"]
+    args = [YTDLP, "--newline", "-P", DOWNLOAD_DIR]
+
+    # Cookies are gathered by the extension (browser.cookies.getAll) and shipped
+    # as Netscape cookies.txt text. Reading Firefox's profile from here doesn't
+    # work because Firefox-spawned children can't access ~/Library/Application
+    # Support/Firefox/ on macOS.
+    if cookies:
+        cookies_file = write_cookies_file(cookies)
+        cleanup.append(cookies_file)
+        args += ["--cookies", cookies_file]
+
     if filename:
         args += ["-o", f"{filename}.%(ext)s"]
 
@@ -134,7 +155,7 @@ def build_args(req):
         args += ["--embed-metadata"]
 
     args.append(url)
-    return args, None
+    return args, cleanup
 
 
 def stream_proc(proc):
@@ -149,17 +170,18 @@ def stream_proc(proc):
 
 def main():
     dlog(f"--- start pid={os.getpid()}")
-    tmpfile = None
+    cleanup = []
     try:
         req = read_message()
         if req is None:
             return
-        # Don't dump the whole manifest into the log.
-        safe = {k: (f"<{len(v)} bytes>" if k == "playlist" and isinstance(v, str) else v) for k, v in req.items()}
+        # Don't dump the whole manifest or cookie blob into the log.
+        redact = {"playlist", "cookies"}
+        safe = {k: (f"<{len(v)} bytes>" if k in redact and isinstance(v, str) else v) for k, v in req.items()}
         dlog(f"req: {safe}")
 
         try:
-            args, tmpfile = build_args(req)
+            args, cleanup = build_args(req)
         except ValueError as e:
             send({"type": "error", "message": str(e)})
             send({"type": "done", "code": 2})
@@ -191,9 +213,9 @@ def main():
         except Exception:
             pass
     finally:
-        if tmpfile:
+        for p in cleanup:
             try:
-                os.unlink(tmpfile)
+                os.unlink(p)
             except Exception:
                 pass
 
