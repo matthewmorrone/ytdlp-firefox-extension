@@ -101,7 +101,20 @@ function handleManifest(tabId, url, rawText) {
 
   if (kind === "master") {
     const variants = parseMasterVariants(rawText, url);
-    store.set(url, { id: `s${++streamSeq}`, url, kind: "master", variants });
+    // A master with separate audio media groups (typical adaptive HLS) lets
+    // yt-dlp itself select+mux video and audio when we hand it this whole
+    // playlist, instead of us picking a single (possibly video-only) variant.
+    const hasAudio = /#EXT-X-MEDIA:TYPE=AUDIO/i.test(rawText);
+    const text = absolutize(rawText, url);
+    const existing = store.get(url);
+    store.set(url, {
+      id: existing ? existing.id : `s${++streamSeq}`,
+      url,
+      kind: "master",
+      variants,
+      hasAudio,
+      text,
+    });
     // A master may let us label media playlists already captured.
     for (const s of store.values()) {
       if (s.kind === "media" && !s.resolution) {
@@ -179,24 +192,51 @@ browser.webRequest.onBeforeRequest.addListener(
 browser.tabs.onRemoved.addListener((tabId) => streamsByTab.delete(tabId));
 
 // Shared-scope API consumed by background.js.
+function bestResolution(variants) {
+  return (variants || [])
+    .map((v) => v.resolution)
+    .filter(Boolean)
+    .sort((a, b) => (parseInt(b.split("x")[1] || "0", 10)) - (parseInt(a.split("x")[1] || "0", 10)))[0] || null;
+}
+
 const HLSCapture = {
   list(tabId) {
     const store = streamsByTab.get(tabId);
     if (!store) return [];
-    return [...store.values()]
-      .filter((s) => s.kind === "media")
-      .map((s) => ({
-        id: s.id,
-        url: s.url,
-        resolution: s.resolution || null,
-        durationSec: s.durationSec,
-        segmentCount: s.segmentCount,
-      }));
+    const out = [];
+    for (const s of store.values()) {
+      if (s.kind === "media") {
+        out.push({
+          id: s.id,
+          url: s.url,
+          kind: "media",
+          resolution: s.resolution || null,
+          durationSec: s.durationSec,
+          segmentCount: s.segmentCount,
+        });
+      } else if (s.kind === "master" && s.hasAudio) {
+        // Only surface masters that reference a separate audio track — that's
+        // what lets yt-dlp produce audio-bearing output. A master without one
+        // offers nothing over the media playlists already listed.
+        out.push({
+          id: s.id,
+          url: s.url,
+          kind: "master",
+          resolution: bestResolution(s.variants),
+          hasAudio: true,
+          durationSec: null,
+          segmentCount: null,
+        });
+      }
+    }
+    return out;
   },
   getText(tabId, id) {
     const store = streamsByTab.get(tabId);
     if (!store) return null;
-    for (const s of store.values()) if (s.id === id && s.kind === "media") return s.text;
+    for (const s of store.values()) {
+      if (s.id === id && (s.kind === "media" || (s.kind === "master" && s.hasAudio))) return s.text;
+    }
     return null;
   },
 };

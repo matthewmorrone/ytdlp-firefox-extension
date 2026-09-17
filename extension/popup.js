@@ -53,14 +53,23 @@ function fmtDuration(sec) {
 
 function streamLabel(s) {
   const parts = [s.resolution ? s.resolution.replace("x", " × ") : "HLS stream"];
-  if (s.durationSec) parts.push(fmtDuration(s.durationSec));
-  parts.push(`${s.segmentCount} seg`);
+  if (s.kind === "master") {
+    parts.push("adaptive, with audio");
+  } else {
+    if (s.durationSec) parts.push(fmtDuration(s.durationSec));
+    parts.push(`${s.segmentCount} seg`);
+  }
   return parts.join(" · ");
 }
 
-// Highest resolution wins, then most segments (the full-length playlist).
+// A master playlist (references separate audio+video tracks, letting yt-dlp
+// mux them) beats a single already-picked media playlist, which may be
+// video-only. Among equals, highest resolution wins, then most segments.
 function pickBest(list) {
   return [...list].sort((a, b) => {
+    const ma = a.kind === "master" ? 1 : 0;
+    const mb = b.kind === "master" ? 1 : 0;
+    if (mb !== ma) return mb - ma;
     const ha = a.resolution ? parseInt(a.resolution.split("x")[1] || "0", 10) : 0;
     const hb = b.resolution ? parseInt(b.resolution.split("x")[1] || "0", 10) : 0;
     if (hb !== ha) return hb - ha;
@@ -74,9 +83,18 @@ async function loadStreams() {
   } catch {
     streams = [];
   }
-  if (streams.length) {
+  // yt-dlp's own YouTube extractor already fetches proper audio+video pairs
+  // via the official API — HLS capture is only needed for sites yt-dlp can't
+  // otherwise reach, and a captured YouTube rendition can be video-only (e.g.
+  // a DVR/premium delivery path) even when the real formats have audio. So
+  // only auto-select a captured stream off YouTube; on YouTube leave it
+  // unselected (falls back to the page URL) unless the user picks one.
+  const isYouTube = !!videoIdFromUrl(currentUrl);
+  if (streams.length && !isYouTube) {
     const best = pickBest(streams);
     selectedStreamId = best ? best.id : null;
+  } else {
+    selectedStreamId = null;
   }
   renderStreams();
 }
